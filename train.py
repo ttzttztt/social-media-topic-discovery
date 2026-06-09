@@ -90,7 +90,8 @@ def build_model(config):
         min_cluster_size=config.get('min_cluster_size', 100),
         min_samples=config.get('min_samples', 5),
         metric='euclidean',
-        prediction_data=True
+        prediction_data=True,
+        cluster_selection_epsilon=config.get('cluster_selection_epsilon', 0.0),
     )
     vectorizer_model = CountVectorizer(
         tokenizer=chinese_tokenizer,
@@ -233,127 +234,92 @@ def run_one(docs, config, name, idx=None, total=None):
 
 def get_tuning_configs():
     """
-    系统化调参配置矩阵，按顺序逐步优化。
-    核心思路：先用大 min_cluster_size 控制主题数，再调其他参数。
+    降低离群比例 — 基于 mcs_200 最优参数，只调离群相关杠杆。
+    固定：n_neighbors=30, n_components=5, min_cluster_size=200
+    变量：min_samples, cluster_selection_epsilon
     """
     configs = {}
 
-    # ---------- 第1步：min_cluster_size ----------
-    # 之前 min_cluster_size=5 → 6122 个主题，完全不可用
-    # 目标：将主题数降到 50~300 范围
-    for mcs in [50, 100, 200]:
-        configs[f"step1_mcs_{mcs}"] = {
-            "embedding_model_name": "shibing624/text2vec-base-chinese",
-            "n_neighbors": 30,
-            "n_components": 5,
-            "min_dist": 0.0,
-            "min_cluster_size": mcs,
-            "min_samples": 5,
-            "max_features": 3000,
-            "ngram_range": (1, 2),
-            "min_df": 5,
-            "use_stopwords": True,
-        }
-
-    # ---------- 第2步：n_neighbors ----------
-    for nn in [50, 80]:
-        configs[f"step2_nn_{nn}"] = {
-            "embedding_model_name": "shibing624/text2vec-base-chinese",
-            "n_neighbors": nn,
-            "n_components": 5,
-            "min_dist": 0.0,
-            "min_cluster_size": 100,
-            "min_samples": 5,
-            "max_features": 3000,
-            "ngram_range": (1, 2),
-            "min_df": 5,
-            "use_stopwords": True,
-        }
-
-    # ---------- 第3步：n_components ----------
-    for nc in [10, 20]:
-        configs[f"step3_nc_{nc}"] = {
-            "embedding_model_name": "shibing624/text2vec-base-chinese",
-            "n_neighbors": 50,
-            "n_components": nc,
-            "min_dist": 0.0,
-            "min_cluster_size": 100,
-            "min_samples": 5,
-            "max_features": 3000,
-            "ngram_range": (1, 2),
-            "min_df": 5,
-            "use_stopwords": True,
-        }
-
-    # ---------- 第4步：停用词 + min_df 微调 ----------
-    configs[f"step4_stopwords_off"] = {
+    # 基准：mcs_200（复现）
+    configs["baseline"] = {
         "embedding_model_name": "shibing624/text2vec-base-chinese",
-        "n_neighbors": 50,
-        "n_components": 5,
-        "min_dist": 0.0,
-        "min_cluster_size": 100,
-        "min_samples": 5,
-        "max_features": 3000,
-        "ngram_range": (1, 2),
-        "min_df": 5,
-        "use_stopwords": False,
+        "n_neighbors": 30, "n_components": 5, "min_dist": 0.0,
+        "min_cluster_size": 200, "min_samples": 5,
+        "cluster_selection_epsilon": 0.0,
+        "max_features": 3000, "ngram_range": (1, 2),
+        "min_df": 5, "use_stopwords": True,
     }
 
-    # ---------- 第5步：综合最优 ----------
-    configs[f"step5_final"] = {
+    # min_samples：降低 → 更少点被判为噪声
+    for ms in [1, 3]:
+        configs[f"ms_{ms}"] = {
+            "embedding_model_name": "shibing624/text2vec-base-chinese",
+            "n_neighbors": 30, "n_components": 5, "min_dist": 0.0,
+            "min_cluster_size": 200, "min_samples": ms,
+            "cluster_selection_epsilon": 0.0,
+            "max_features": 3000, "ngram_range": (1, 2),
+            "min_df": 5, "use_stopwords": True,
+        }
+
+    # cluster_selection_epsilon：合并邻近聚类，覆盖噪声地带
+    for eps in [0.1, 0.25]:
+        configs[f"eps_{eps}"] = {
+            "embedding_model_name": "shibing624/text2vec-base-chinese",
+            "n_neighbors": 30, "n_components": 5, "min_dist": 0.0,
+            "min_cluster_size": 200, "min_samples": 5,
+            "cluster_selection_epsilon": eps,
+            "max_features": 3000, "ngram_range": (1, 2),
+            "min_df": 5, "use_stopwords": True,
+        }
+
+    # 组合
+    configs["combo_ms3_eps01"] = {
         "embedding_model_name": "shibing624/text2vec-base-chinese",
-        "n_neighbors": 50,
-        "n_components": 5,
-        "min_dist": 0.05,
-        "min_cluster_size": 100,
-        "min_samples": 10,
-        "max_features": 3000,
-        "ngram_range": (1, 2),
-        "min_df": 10,
-        "use_stopwords": True,
+        "n_neighbors": 30, "n_components": 5, "min_dist": 0.0,
+        "min_cluster_size": 200, "min_samples": 3,
+        "cluster_selection_epsilon": 0.1,
+        "max_features": 3000, "ngram_range": (1, 2),
+        "min_df": 5, "use_stopwords": True,
+    }
+
+    configs["combo_ms1_eps025"] = {
+        "embedding_model_name": "shibing624/text2vec-base-chinese",
+        "n_neighbors": 30, "n_components": 5, "min_dist": 0.0,
+        "min_cluster_size": 200, "min_samples": 1,
+        "cluster_selection_epsilon": 0.25,
+        "max_features": 3000, "ngram_range": (1, 2),
+        "min_df": 5, "use_stopwords": True,
     }
 
     return configs
 
 
 def get_quick_configs():
-    """快速模式：只跑3个核心配置"""
+    """快速模式：选 3 个代表性配置"""
     return {
-        "quick_mcs_50": {
+        "quick_baseline": {
             "embedding_model_name": "shibing624/text2vec-base-chinese",
-            "n_neighbors": 30,
-            "n_components": 5,
-            "min_dist": 0.0,
-            "min_cluster_size": 50,
-            "min_samples": 5,
-            "max_features": 3000,
-            "ngram_range": (1, 2),
-            "min_df": 5,
-            "use_stopwords": True,
+            "n_neighbors": 30, "n_components": 5, "min_dist": 0.0,
+            "min_cluster_size": 200, "min_samples": 5,
+            "cluster_selection_epsilon": 0.0,
+            "max_features": 3000, "ngram_range": (1, 2),
+            "min_df": 5, "use_stopwords": True,
         },
-        "quick_mcs_100": {
+        "quick_ms_1": {
             "embedding_model_name": "shibing624/text2vec-base-chinese",
-            "n_neighbors": 50,
-            "n_components": 5,
-            "min_dist": 0.0,
-            "min_cluster_size": 100,
-            "min_samples": 5,
-            "max_features": 3000,
-            "ngram_range": (1, 2),
-            "min_df": 5,
-            "use_stopwords": True,
+            "n_neighbors": 30, "n_components": 5, "min_dist": 0.0,
+            "min_cluster_size": 200, "min_samples": 1,
+            "cluster_selection_epsilon": 0.0,
+            "max_features": 3000, "ngram_range": (1, 2),
+            "min_df": 5, "use_stopwords": True,
         },
-        "quick_mcs_200": {
+        "quick_eps_025": {
             "embedding_model_name": "shibing624/text2vec-base-chinese",
-            "n_neighbors": 80,
-            "n_components": 5,
-            "min_dist": 0.0,
-            "min_cluster_size": 200,
-            "min_samples": 10,
-            "max_features": 3000,
-            "ngram_range": (1, 2),
-            "min_df": 10,
-            "use_stopwords": True,
+            "n_neighbors": 30, "n_components": 5, "min_dist": 0.0,
+            "min_cluster_size": 200, "min_samples": 5,
+            "cluster_selection_epsilon": 0.25,
+            "max_features": 3000, "ngram_range": (1, 2),
+            "min_df": 5, "use_stopwords": True,
         },
     }
 
