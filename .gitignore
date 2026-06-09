@@ -1,0 +1,25 @@
+# Claude 配置
+.claude/
+
+# 训练输出
+results/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 大文件（模型/嵌入向量）
+*.pkl
+*.safetensors
+*.bin
+*.h5
+models/
+
+# IDE
+.vscode/
+
+# 临时文件
+*.tmp
+*.temp
+joblib_memmapping_folder_*/
